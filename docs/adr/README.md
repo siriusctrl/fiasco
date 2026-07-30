@@ -133,3 +133,5 @@ Use these sections:
   Skill](0048-move-orchestration-graphs-to-a-skill.md)
 - [ADR 0049: Route progressive MCP artifacts through one command
   tool](0049-progressive-mcp-artifacts.md)
+- [ADR 0050: Route harness capabilities through an in-process command
+  surface](0050-in-process-command-surface.md)

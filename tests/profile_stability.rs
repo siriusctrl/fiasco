@@ -45,6 +45,30 @@ impl Tool for MarkerTool {
     }
 }
 
+struct OptionalCommandTool {
+    name: &'static str,
+}
+
+#[async_trait]
+impl Tool for OptionalCommandTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: self.name.to_owned(),
+            description: format!("Test-only {} command", self.name),
+            input_schema: json!({
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+                "additionalProperties": false
+            }),
+        }
+    }
+
+    async fn execute(&self, _context: ToolContext, _arguments: Value) -> Result<RawToolOutput> {
+        Ok(RawToolOutput::text("unused"))
+    }
+}
+
 #[derive(Default)]
 struct CapturingFinalProvider {
     requests: Mutex<Vec<ModelRequest>>,
@@ -88,8 +112,8 @@ impl ModelProvider for NoCompactedHistoryProvider {
             0 => Ok(ModelResponse::new(
                 Message::assistant(vec![MessageContent::ToolCall(ToolCall {
                     id: "call-empty-history".to_owned(),
-                    name: "history_search".to_owned(),
-                    arguments: json!({"pattern": "anything"}).into(),
+                    name: "fiasco".to_owned(),
+                    arguments: json!({"command": "history search pattern=anything"}).into(),
                 })]),
                 ModelUsage::default(),
             )),
@@ -151,8 +175,12 @@ fn delegate_response(id: &str, prompt: &str) -> ModelResponse {
     ModelResponse::new(
         Message::assistant(vec![MessageContent::ToolCall(ToolCall {
             id: id.to_owned(),
-            name: "delegate".to_owned(),
-            arguments: json!({"name": "delegated_child", "prompt": prompt}).into(),
+            name: "fiasco".to_owned(),
+            arguments: json!({
+                "command": "agent start name=delegated_child prompt=-",
+                "stdin": prompt,
+            })
+            .into(),
         })]),
         ModelUsage::default(),
     )
@@ -183,7 +211,7 @@ async fn two_identical_root_runs_have_byte_identical_stable_prefixes() {
     assert!(
         requests
             .iter()
-            .all(|request| tool_names(request).contains(&"delegate"))
+            .all(|request| tool_names(request).contains(&"fiasco"))
     );
     assert_eq!(
         serialized(&requests[0].system),
@@ -198,24 +226,7 @@ async fn two_identical_root_runs_have_byte_identical_stable_prefixes() {
         serialized(&requests[1].messages[0])
     );
     let names = tool_names(&requests[0]);
-    assert_eq!(
-        names,
-        [
-            "bash",
-            "close",
-            "delegate",
-            "history_read",
-            "history_search",
-            "inspect",
-            "list_handles",
-            "marker",
-            "read",
-            "send_message",
-            "stop",
-            "wait",
-            "write"
-        ]
-    );
+    assert_eq!(names, ["bash", "fiasco", "marker", "read", "write"]);
     for tool_name in [
         "`delegate`",
         "history_search",
@@ -235,11 +246,17 @@ async fn two_identical_root_runs_have_byte_identical_stable_prefixes() {
 }
 
 #[tokio::test]
-async fn delegate_schema_is_independent_of_the_base_tool_registry() {
+async fn fiasco_schema_and_catalog_are_independent_of_the_base_tool_registry() {
     let workspace = TempDir::new().unwrap();
     let provider = Arc::new(CapturingFinalProvider::default());
     let mut tools = ToolRegistry::default();
     tools.register(Arc::new(MarkerTool)).unwrap();
+    tools
+        .register(Arc::new(OptionalCommandTool { name: "web_search" }))
+        .unwrap();
+    tools
+        .register(Arc::new(OptionalCommandTool { name: "mcp" }))
+        .unwrap();
     let runner = AgentRunner::new(AgentRunnerConfig {
         provider: provider.clone(),
         model: "test-model".to_owned(),
@@ -256,21 +273,33 @@ async fn delegate_schema_is_independent_of_the_base_tool_registry() {
     });
 
     runner
-        .run(RunRequest::root("static delegate schema"))
+        .run(RunRequest::root("static fiasco schema"))
         .await
         .unwrap();
 
     let requests = provider.requests.lock().unwrap();
-    let delegate = requests[0]
+    let fiasco = requests[0]
         .tools
         .iter()
-        .find(|tool| tool.name == "delegate")
+        .find(|tool| tool.name == "fiasco")
         .unwrap();
     assert_eq!(
-        delegate.input_schema.pointer("/required"),
-        Some(&json!(["name", "prompt"]))
+        fiasco.input_schema.pointer("/required"),
+        Some(&json!(["command"]))
     );
-    assert_eq!(delegate.input_schema["additionalProperties"], false);
+    assert!(fiasco.input_schema["properties"]["stdin"].is_object());
+    assert_eq!(fiasco.input_schema["additionalProperties"], false);
+    assert!(fiasco.description.contains("agent start"));
+    assert!(fiasco.description.contains("web search"));
+    assert!(fiasco.description.contains("mcp <source> <tool>"));
+    assert!(!requests[0].tools.iter().any(|tool| tool.name == "delegate"));
+    assert!(
+        !requests[0]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "web_search")
+    );
+    assert!(!requests[0].tools.iter().any(|tool| tool.name == "mcp"));
 }
 
 #[tokio::test]
@@ -304,60 +333,9 @@ async fn fixed_profiles_expose_exact_schema_sets_at_depth_two() {
     assert!(!delegating.is_empty());
     assert!(!leaf.is_empty());
 
-    assert_profile_tools(
-        &root,
-        &[
-            "bash",
-            "close",
-            "delegate",
-            "history_read",
-            "history_search",
-            "inspect",
-            "list_handles",
-            "marker",
-            "read",
-            "send_message",
-            "stop",
-            "wait",
-            "write",
-        ],
-    );
-    assert_profile_tools(
-        &delegating,
-        &[
-            "bash",
-            "close",
-            "delegate",
-            "history_read",
-            "history_search",
-            "inspect",
-            "list_handles",
-            "marker",
-            "read",
-            "send_message",
-            "stop",
-            "wait",
-            "write",
-        ],
-    );
-    assert_profile_tools(
-        &leaf,
-        &[
-            "bash",
-            "close",
-            "delegate",
-            "history_read",
-            "history_search",
-            "inspect",
-            "list_handles",
-            "marker",
-            "read",
-            "send_message",
-            "stop",
-            "wait",
-            "write",
-        ],
-    );
+    assert_profile_tools(&root, &["bash", "fiasco", "marker", "read", "write"]);
+    assert_profile_tools(&delegating, &["bash", "fiasco", "marker", "read", "write"]);
+    assert_profile_tools(&leaf, &["bash", "fiasco", "marker", "read", "write"]);
     assert_eq!(serialized(&root[0].tools), serialized(&delegating[0].tools));
     assert_eq!(serialized(&root[0].tools), serialized(&leaf[0].tools));
     assert_eq!(
@@ -458,7 +436,7 @@ async fn history_search_before_compaction_returns_an_empty_result() {
     assert!(
         requests
             .iter()
-            .all(|request| tool_names(request).contains(&"delegate"))
+            .all(|request| tool_names(request).contains(&"fiasco"))
     );
     assert!(
         text_content(&requests[0].messages[0])

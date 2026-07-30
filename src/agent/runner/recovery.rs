@@ -14,7 +14,7 @@ use crate::agent::{
     handle::{AgentMailbox, HandleOutputNotice},
 };
 
-const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous fiasco process stopped. Any incomplete trailing tool turn was discarded; activities and asynchronous tool jobs from that process stopped and were not resumed. Mailbox input and undelivered results were also discarded. Existing agent threads keep their complete messages and remain available through list_handles, inspect, and an explicit send_message. Workspace or external side effects may already have occurred, so inspect current state before retrying operations.\n</runtime-reminder>";
+const RESTART_REMINDER: &str = "<runtime-reminder>\nThe previous fiasco process stopped. Any incomplete trailing tool turn was discarded; activities and asynchronous tool jobs from that process stopped and were not resumed. Mailbox input and undelivered results were also discarded. Existing agent threads keep their complete messages and remain available through the `fiasco` commands `agent list`, `agent inspect`, and an explicit `agent send`. Workspace or external side effects may already have occurred, so inspect current state before retrying operations.\n</runtime-reminder>";
 
 impl AgentRunner {
     pub async fn resume(self: &Arc<Self>, run_id: impl Into<String>) -> Result<RunResult> {

@@ -86,22 +86,19 @@ impl ModelProvider for CompactedTaskProvider {
         }
 
         match self.root_calls.fetch_add(1, Ordering::SeqCst) {
-            0 => Ok(tool_response(
+            0 => Ok(command_response(
                 "delegate-review",
-                "delegate",
-                json!({
-                    "name": "review existing work",
-                    "prompt": "Inspect only, then report. Do not edit or delegate."
-                }),
+                "agent start name='review existing work' prompt=-".to_owned(),
+                Some("Inspect only, then report. Do not edit or delegate.".to_owned()),
                 1_000,
             )),
             1 => {
                 let handle = delegate_handle(&request)?;
                 *self.child_handle.lock().unwrap() = Some(handle.clone());
-                Ok(tool_response(
+                Ok(command_response(
                     "status-review",
-                    "list_handles",
-                    json!({"handles": [handle]}),
+                    shell_words::join(["agent", "list", &format!("handles={}", json!([handle]))]),
+                    None,
                     1_000,
                 ))
             }
@@ -113,10 +110,10 @@ impl ModelProvider for CompactedTaskProvider {
                     .unwrap()
                     .clone()
                     .context("child handle was not recorded before compaction")?;
-                Ok(tool_response(
+                Ok(command_response(
                     "wait-review",
-                    "wait",
-                    json!({"handles": [handle]}),
+                    shell_words::join(["agent", "wait", &format!("handles={}", json!([handle]))]),
+                    None,
                     10,
                 ))
             }
@@ -254,16 +251,20 @@ fn runner(
     })
 }
 
-fn tool_response(
+fn command_response(
     id: &str,
-    name: &str,
-    arguments: serde_json::Value,
+    command: String,
+    stdin: Option<String>,
     input_tokens: u64,
 ) -> ModelResponse {
+    let mut arguments = json!({"command": command});
+    if let Some(stdin) = stdin {
+        arguments["stdin"] = stdin.into();
+    }
     ModelResponse::new(
         Message::assistant(vec![MessageContent::ToolCall(ToolCall {
             id: id.to_owned(),
-            name: name.to_owned(),
+            name: "fiasco".to_owned(),
             arguments: arguments.into(),
         })]),
         ModelUsage {

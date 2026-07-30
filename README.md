@@ -18,15 +18,17 @@ itself remains headless.
 - OpenAI-compatible Responses and Chat Completions streaming APIs
 - Anthropic-compatible Messages streaming API
 - streamed text, fragmented tool calls, and usage/cache-token fields in events
-- compact `read`, `write`, and `bash` built-ins plus optional `web_search`;
-  `read` supports bounded UTF-8 text and image attachments for vision-capable
-  configured models
+- compact provider surface with native `read`, `write`, and `bash` plus one
+  in-process `fiasco` command tool; `read` supports bounded UTF-8 text and image
+  attachments for vision-capable configured models
+- typed harness commands for skills, optional web search, history, agents, and
+  runtime handles, with linear pipelines and terminal atomic redirect
 - exact-first, atomic multi-edit writes with CRLF/BOM preservation
 - run-local artifact spill for large tool results with bounded head/tail previews
 - optional local context compaction recorded as ordinary messages, with
   read-only regex history retrieval
 - Agent Skills discovery with progressive `SKILL.md` loading
-- progressively documented MCP stdio servers routed through one `mcp` command
+- progressively documented MCP stdio servers routed through `fiasco mcp`
 - command hooks for run and tool lifecycle events
 - concurrent direct-tool batches whose unfinished calls continue under
   process-local runtime handles
@@ -113,9 +115,9 @@ any result is missing. It then appends a user/runtime reminder that the process
 stopped and workspace or external side effects may already have occurred. It
 does not restore ordinary asynchronous tool jobs, active child work,
 process-local input, or undelivered results. Existing child threads keep their
-complete transcripts and remain discoverable through `list_handles`; an
-explicit `send_message` adds a crash reminder and starts a new activity. Resume
-the parent run rather than invoking `fiasco resume` on a child id directly.
+complete transcripts and remain discoverable through `agent list`; an explicit
+`agent send` adds a crash reminder and starts a new activity. Resume the parent
+run rather than invoking `fiasco resume` on a child id directly.
 
 Before resume, the process supervisor, cgroup, or container must have killed
 the previous fiasco process and all locally managed descendants. Remote
@@ -125,17 +127,20 @@ jobs and other external side effects are not covered by that assumption.
 
 Fiasco keeps its built-in system prompt independent of the workspace,
 tool-agnostic, and unchanged across normal agent calls. Each typed `tool.yaml`
-owns its capability's workflow guidance as well as its schema, so removing a
-tool removes its model-facing instructions too. At the start of each run, the
+owns its capability's workflow guidance as well as its schema. Native manifests
+become provider schemas; internal manifests drive `fiasco` help and argument
+conversion, so removing a command also removes its catalog guidance. At the
+start of each run, the
 first user message contains a synthetic `<runtime-reminder>` block before the
 original request. The reminder snapshots the workspace path, `AGENTS.md` (or
 lowercase `agents.md` when the canonical name is absent), discovered skill
 metadata, memory locations, and any delegated-task instructions that apply to
 the role. It also records the role and remaining
 delegation depth; GeneralTask guidance lives here rather than in a second
-system prompt. Built-in tool schemas are identical for Root and GeneralTask,
-sorted, and frozen for the run; configuration or file changes take effect on
-the next run. The environment section also states `current model supported
+system prompt. Provider tool schemas and enabled command routes are identical
+for Root and GeneralTask, sorted, and frozen for the run; configuration or file
+changes take effect on the next run. The environment section also states
+`current model supported
 modalities: [text]` (or `[text, image]`); the stable system prompt tells the
 agent not to request an absent modality. Compaction reuses this stable
 system/tool prefix and adds one final user instruction only to the compaction
@@ -340,31 +345,32 @@ compaction retries have numbered attempts, while a preflight rejection has no
 started event or attempt because no provider request occurred. Compatible Chat `reasoning_content` and replayable opaque
 provider items are included in the between-call estimate.
 
-The normal agent receives the `history_search` and `history_read` schemas from
-its first provider request whether or not `compact_at_tokens` is configured.
-Changing the threshold controls compacted-state creation only; it does not
-change the normal system prompt or tool schemas. Before anything has been
-compacted, the history tools simply have no compacted prefix to search or read.
+The normal agent receives the `fiasco` schema with `history search` and
+`history read` routes from its first provider request whether or not
+`compact_at_tokens` is configured. Changing the threshold controls
+compacted-state creation only; it does not change the normal system prompt,
+provider schemas, or command catalog. Before anything has been compacted, the
+history commands simply have no compacted prefix to search or read.
 
 Two read-only tools recover exact details omitted from the active request:
 
-- `history_search({"pattern":"..."})` applies a Rust regular expression only
-  to compacted messages and their linked textual tool-result artifacts. Results
+- `history search <pattern>` applies a Rust regular expression only to
+  compacted messages and their linked textual tool-result artifacts. Results
   are newest-first. Each match contains `ref`, `source`, and `snippet`: refs are
   run-local sequence addresses such as `m37` (smaller numbers are older), while
   `source` is `message` for inline content or `artifact` for a linked complete
   spilled result.
-- `history_read({"ref":"m37","before":2,"after":2})` reads a bounded
-  chronological window around one ref. It returns JSONL records shaped as
+- `history read m37 before=2 after=2` reads a bounded chronological window
+  around one ref. It returns JSONL records shaped as
   `{"ref":"m<N>","message":<OpenAI Chat-compatible message>}` and keeps tool
   calls paired with their results.
 
 The local reader invokes `rg` for bounded-memory searches inside full textual
 artifacts, so ripgrep must be available on `PATH` for that part of
-`history_search`. A future remote reader can provide the same contract from a
+`history search`. A future remote reader can provide the same contract from a
 database or service.
 
-Neither tool has a cursor. `history_search_max_matches` limits a query to its
+Neither command has a cursor. `history_search_max_matches` limits a query to its
 newest matches; if reached, older matches are omitted and the model must refine
 the regex. This is distinct from artifact preview truncation: if the bounded
 JSON/JSONL tool result is too large, its complete returned content is saved as
@@ -372,10 +378,11 @@ an artifact and can be inspected with `read`, continuing from the returned
 `line_offset` or `byte_offset`; `bash`/`rg` is also useful for targeted searches. Query-limit
 omissions are not present in that artifact.
 
-Each assembled agent run has a sorted, frozen toolset. A run compacts
-only when both history tools and at least one artifact inspection tool (`read`
-or `bash`) are present. The compaction request reuses the same system prompt and
-tool schemas; a tool-call response is rejected rather than executed.
+Each assembled agent run has sorted, frozen provider schemas and command
+routes. A run compacts only when both history adapters and at least one artifact
+inspection tool (`read` or `bash`) are present. The compaction request reuses
+the same system prompt and tool schemas; a tool-call response is rejected
+rather than executed.
 
 This release implements local model-generated compacted states only. It does not use
 OpenAI or another provider's server-side compaction API.
@@ -407,28 +414,48 @@ The launch tool surface is intentionally small:
   combined stdout/stderr and adds a status line only for unsuccessful
   completion. It uses a non-login shell and inherits fiasco's environment
   without loading profile files
-- `history_search`: regex search over the compacted trajectory prefix
-- `history_read`: a bounded message window around a returned history ref
-- `load_skill`: progressive loading of a catalogued skill's full instructions
-- `delegate`: asynchronously start a reusable GeneralTask agent
-- `list_handles`: discover all visible handles or inspect selected handles
-- `wait`: wait until any selected handle changes or one interval expires
-- `inspect`: read a bounded window of a child agent's messages
-- `send_message`: send `steer` input now or queue `followup` input for later
-- `stop`: stop a tool job or the current activity of a reusable agent
-- `close`: cancel current agent activity if needed, then permanently close it
-- `web_search`: optional Brave-backed public web search
-- `mcp`: optional CLI-like access to configured MCP artifacts
+- `fiasco`: CLI-like in-process access to skills, optional web search, history,
+  delegation, runtime handles, and optional MCP
 
-Root and GeneralTask receive the same built-in schemas, including `delegate`
-and every runtime-handle control. Remaining delegation depth is frozen in run
-state and shown in the runtime reminder. At zero, `delegate` returns a local
-tool error without creating a child; its schema does not disappear. Memory adds
-paths to the reminder, not a tool schema. `web_search` and the single `mcp`
-tool depend on startup configuration. Configured MCP artifacts contribute only
-their namespace, description, and source-map path to the runtime reminder, not
-their remote schemas. The resulting schemas are sorted and frozen before the
-run's first normal provider call.
+The `fiasco` input has a required `command` string and optional exact `stdin`.
+Its enabled catalog includes:
+
+```text
+skill load <name>
+web search <query> [count=<integer>] ...
+history search <pattern>
+history read <ref> [before=<integer>] [after=<integer>]
+agent start name=<string> prompt=<string|->
+agent send handle=<id> mode=<steer|followup> message=<string|->
+agent list [handles=<JSON array>] [include_closed=<boolean>]
+agent inspect <handle> [before_seq=<integer>] [limit=<integer>]
+agent wait [handles=<JSON array>]
+agent stop <handle>
+agent close <handle>
+mcp <source> <tool> [name=value ...]
+```
+
+`help` lists the enabled routes; `help <command path>` returns that command's
+typed description and input schema. Optional web search and MCP add routes
+before the run begins instead of adding provider schemas.
+
+Quoted words, `name=value`, exact stdin substitution with `-`, linear `|`, and
+one terminal `> path` are supported. Pipelines run sequentially in the owning
+process, pass the complete successful pre-artifact output, and stop at the first
+error. Redirect occurs only after the whole pipeline succeeds and reuses
+`write`'s atomic replacement contract. This is not a shell: use native `bash`
+for `&&`, `||`, append, variables, globbing, command substitution, loops,
+background jobs, or file-descriptor redirection. Pipeline input must be
+unambiguous UTF-8; native image attachments cannot be piped or redirected.
+
+Root and GeneralTask receive the same provider schemas and command routes.
+Remaining delegation depth is frozen in run state and shown in the runtime
+reminder. At zero, `agent start` returns a local error without creating a
+child; the route does not disappear. Memory adds paths to the reminder, not a
+schema or command. Configured MCP artifacts contribute only their namespace,
+description, and source-map path to the runtime reminder, not their remote
+schemas. The schemas and route catalog are frozen before the run's first normal
+provider call.
 
 `write` requires every edit target to identify one non-overlapping region in
 the original file. It tries exact matching first, then a conservative whole-line
@@ -448,37 +475,37 @@ batch and issue dependent work after seeing results.
 The tool result is a status-less `<runtime_handle>` notice containing the
 handle, kind, and name; it only acknowledges that work is running.
 
-`delegate` requires a non-empty model-supplied display name and starts one
+`agent start` requires a non-empty model-supplied display name and starts one
 isolated, reusable `general-task` agent asynchronously. Its handle is the child
 run id, so the handle addresses the same durable transcript across activities
-and process restarts. Promoted ordinary-tool handles exist only in the current
+and process restarts. Promoted outer-tool handles exist only in the current
 process. Each output uses the ordinary artifact policy. At the next model
-boundary, one user/runtime message batches every ready
-`<runtime_handle status="...">` notice.
+boundary, one user/runtime message batches every ready `<runtime_handle
+status="...">` notice.
 
-The handle-control calls are intentionally small:
+The handle commands below are values of `fiasco.command`:
 
 ```text
-delegate({"name":"inspect_tests","prompt":"inspect the failing tests and report the cause"})
-wait({"handles":["01J..."]})
-list_handles({"include_closed":false})
-list_handles({"handles":["01J..."]})
-inspect({"handle":"01J...","limit":6,"before_seq":42})
-send_message({"handle":"01J...","message":"check the failing test first","mode":"steer"})
-send_message({"handle":"01J...","message":"then compare the alternatives","mode":"followup"})
-stop({"handle":"01J..."})
-close({"handle":"01J..."})
+agent start name=inspect_tests prompt=-
+agent wait 'handles=["01J..."]'
+agent list include_closed=false
+agent list 'handles=["01J..."]'
+agent inspect 01J... limit=6 before_seq=42
+agent send handle=01J... mode=steer message=-
+agent send handle=01J... mode=followup message=-
+agent stop 01J...
+agent close 01J...
 ```
 
-`wait` returns as soon as any selected handle has a result or status change,
+`agent wait` returns as soon as any selected handle has a result or status change,
 while its snapshot may still show other selected handles running. An omitted
-or empty `handles` list means all visible handles. `list_handles`
+or empty `handles` list means all visible handles. `agent list`
 returns all child agents owned by the current run plus current-process tool
 jobs, including idle reusable agents and optionally closed ones. When handles
 are named, it returns their current snapshots; `include_closed` affects
 discovery rather than named lookup.
-`before_seq` is exclusive and optional; inspect returns `next_before_seq` when
-older messages exist.
+`before_seq` is exclusive and optional; `agent inspect` returns
+`next_before_seq` when older messages exist.
 
 ## Skills
 
@@ -488,9 +515,10 @@ Fiasco discovers Agent Skills from lowest to highest precedence:
 2. `<workspace>/.agents/skills/*/SKILL.md`
 3. `<workspace>/skills/*/SKILL.md`
 
-Only skill name and description enter the stable prompt prefix. `load_skill`
-returns the instruction body without repeating that metadata, plus the absolute
-skill-directory path needed to resolve referenced files.
+Only skill name and description enter the stable prompt prefix. `fiasco`
+command `skill load <name>` returns the instruction body without repeating that
+metadata, plus the absolute skill-directory path needed to resolve referenced
+files.
 
 ```bash
 fiasco skills list
@@ -502,17 +530,16 @@ Each configured MCP source has a model-generated namespace and progressive
 artifact containing `MCP.md`, an exact captured `catalog.json`, and optional
 capability references. Only the namespace, short description, and absolute
 `MCP.md` path enter the runtime reminder. The model reads that source map and
-the relevant reference before using the one fixed `mcp` tool:
+the relevant reference before using the `fiasco` MCP route:
 
 ```text
-mcp("github search_code query='McpRuntime' language=rust limit=20")
+mcp github search_code query=McpRuntime language=rust limit=20
 ```
 
-The actual provider tool schema has one `command` string. Fiasco parses shell
-quoting, resolves the first two tokens as namespace and exact remote tool name,
-converts `name=value` arguments using the captured input schema, and calls the
-configured stdio server. A tool with one input property also accepts one
-positional value.
+The provider sees only the general `fiasco` schema. Its MCP route resolves the
+next two tokens as namespace and exact remote tool name, converts `name=value`
+arguments using the captured input schema, and calls the configured stdio
+server. A tool with one input property also accepts one positional value.
 
 Configure the transport separately from the artifact:
 
@@ -552,13 +579,14 @@ raw per-tool catalog exact and outside model context.
 
 ## Multi-Agent Orchestration
 
-`delegate` asynchronously starts the sole model-facing `general-task` role as
-a reusable child agent;
+`fiasco` command `agent start` asynchronously starts the sole model-facing
+`general-task` role as a reusable child agent;
 there is no model-facing profile choice. The runtime reminder states the exact
 remaining delegation depth. With the default `max_subagent_depth = 1`, the
 first child has
-zero remaining depth; `delegate` stays visible there but fails locally. A child
-is another invocation of the same runner, not a second agent class. Each child:
+zero remaining depth; `agent start` stays available there but fails locally. A
+child is another invocation of the same runner, not a second agent class. Each
+child:
 
 - invokes the same `AgentRunner` and provider
 - has a separate run id, transcript, events, and artifacts
@@ -571,15 +599,15 @@ Parent and child model requests share `runtime.max_parallel_model_calls`, which
 defaults to one for compatibility with rate-limited endpoints. Delegated-child
 capacity remains independently controlled by `runtime.max_parallel_subagents`.
 
-Every `delegate` call starts an isolated child with only its runtime reminder
-and delegated prompt. The prompt must include the complete objective and any
-task-specific context; the child does not inherit the parent conversation. A
-completed activity leaves that child idle. `send_message` resumes the same child
-with an ordinary user message, `followup` queues that message without blocking
-the parent, and a stopped agent stays paused until its next `send_message`.
-`close` is the explicit end of the agent's lifetime. It cancels and waits for
-current activity when needed, rejects new input once closing begins, and
-discards any still-queued followups. Its
+Every `agent start` command starts an isolated child with only its runtime
+reminder and delegated prompt. The prompt must include the complete objective
+and any task-specific context; the child does not inherit the parent
+conversation. A completed activity leaves that child idle. `agent send`
+resumes the same child with an ordinary user message; `mode=followup` queues
+that message without blocking the parent, and a stopped agent stays paused
+until its next `agent send`. `agent close` is the explicit end of the agent's
+lifetime. It cancels and waits for current activity when needed, rejects new
+input once closing begins, and discards any still-queued followups. Its
 trajectory is stored in the child run, so reuse, resume, and history retrieval
 do not depend on a live parent process.
 
@@ -592,8 +620,8 @@ tool execution or time spent waiting for the shared model slot.
 Only child activity results return to the parent context; full child
 transcripts remain in their own run directories. There is no parent-side
 persistent coordination record or recovery state machine. On restart,
-`list_handles` discovers direct child runs by parent id and presents every open
-thread as idle without launching it. The first explicit `send_message` reuses
+`agent list` discovers direct child runs by parent id and presents every open
+thread as idle without launching it. The first explicit `agent send` reuses
 the child's complete transcript after adding a crash reminder. Closed children
 stay closed. Tool jobs and undelivered activity outputs from the previous
 process are gone; the parent crash reminder leaves any retry decision to the
@@ -638,21 +666,23 @@ See [memory.md](docs/memory.md).
 CLI/job
   -> AgentRunner
      -> ModelProvider
-     -> ToolRegistry
-        -> local Tool adapters grouped where related
-        -> one namespaced MCP command adapter
-        -> RuntimeHandleManager
-           -> promoted direct Tool future
-           -> delegated child AgentRunner
+     -> provider ToolRegistry
+        -> bash / read / write
+        -> fiasco command adapter
+           -> hidden command ToolRegistry
+              -> skills / web / history / MCP
+              -> RuntimeHandleManager
+                 -> promoted direct Tool future
+                 -> delegated child AgentRunner
      -> ArtifactStore
      -> RunDirStore
      -> EventSink
 ```
 
-Provider wire formats never enter the loop. The MCP command adapter uses the
-same `Tool` contract as local adapters while its artifact registry routes into
-remote MCP clients. Subagents use the same runner. Large results use the same
-artifact contract regardless of source.
+Provider wire formats never enter the loop. Hidden command adapters use the
+same `Tool` contract as native adapters, and the MCP adapter routes through its
+artifact registry into remote clients. Subagents use the same runner. Large
+results use the same artifact contract regardless of source.
 
 Read [architecture.md](docs/architecture.md) and
 [design-choices.md](docs/design-choices.md) for the detailed boundaries and

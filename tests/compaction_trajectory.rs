@@ -106,20 +106,20 @@ impl ModelProvider for InspectableTrajectoryProvider {
             // Scripted usage crosses the threshold before the next normal call,
             // after both marker pairs are durable.
             1 => Ok(tool_call_response("call-new", "new", 20_000)),
-            2 => Ok(history_tool_call_response(
+            2 => Ok(command_tool_call_response(
                 "call-history-search",
-                "history_search",
-                json!({"pattern": "result-old"}),
+                "history search pattern=result-old".to_owned(),
                 80,
             )),
-            3 => Ok(history_tool_call_response(
+            3 => Ok(command_tool_call_response(
                 "call-history-read",
-                "history_read",
-                json!({
-                    "ref": history_match_ref(&request)?,
-                    "before": 1,
-                    "after": 1,
-                }),
+                shell_words::join([
+                    "history",
+                    "read",
+                    &format!("ref={}", history_match_ref(&request)?),
+                    "before=1",
+                    "after=1",
+                ]),
                 100,
             )),
             4 => Ok(ModelResponse::new(
@@ -151,17 +151,12 @@ fn tool_call_response(id: &str, label: &str, input_tokens: u64) -> ModelResponse
     )
 }
 
-fn history_tool_call_response(
-    id: &str,
-    name: &str,
-    arguments: Value,
-    input_tokens: u64,
-) -> ModelResponse {
+fn command_tool_call_response(id: &str, command: String, input_tokens: u64) -> ModelResponse {
     ModelResponse::new(
         Message::assistant(vec![MessageContent::ToolCall(ToolCall {
             id: id.to_owned(),
-            name: name.to_owned(),
-            arguments: arguments.into(),
+            name: "fiasco".to_owned(),
+            arguments: json!({"command": command}).into(),
         })]),
         ModelUsage {
             input_tokens: Some(input_tokens),
@@ -312,12 +307,12 @@ async fn retained_trajectory_exercises_search_and_read_after_one_compaction() {
     assert!(has_tool_call(
         &normal_requests[3].messages[5],
         "call-history-search",
-        "history_search"
+        "fiasco"
     ));
     assert!(has_tool_call(
         &normal_requests[4].messages[7],
         "call-history-read",
-        "history_read"
+        "fiasco"
     ));
     let read_output = tool_result_content(&trajectory, "call-history-read").unwrap();
     assert!(read_output.lines().any(|line| {

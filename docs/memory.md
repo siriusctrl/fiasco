@@ -28,8 +28,8 @@ curated durable knowledge rather than dumping a transcript.
 
 For a small focused change, the current agent edits the Markdown directly. For
 a large independent consolidation, an agent with remaining delegation depth
-can use `delegate`,
-continue other useful work, then use `wait` or accept the completed
+can use `agent start`,
+continue other useful work, then use `agent wait` or accept the completed
 activity result before verifying the files. This is the same durable
 GeneralTask mechanism used for any other
 delegated work; the harness does not need memory-specific execution or recovery

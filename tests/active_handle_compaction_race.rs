@@ -102,20 +102,21 @@ impl ModelProvider for CompletingDuringCompactionProvider {
             return Ok(text_response("child completed during compaction"));
         }
         match self.root_calls.fetch_add(1, Ordering::SeqCst) {
-            0 => Ok(tool_response(
+            0 => Ok(command_response(
                 "delegate-review",
-                "delegate",
-                json!({
-                    "name": "compaction review",
-                    "prompt": "Inspect only and return a report."
-                }),
+                "agent start name='compaction review' prompt=-".into(),
+                Some("Inspect only and return a report.".into()),
             )),
             1 => {
                 let handle = delegate_handle(&request)?;
-                Ok(tool_response(
+                Ok(command_response(
                     "status-review",
-                    "list_handles",
-                    json!({"handles": [handle]}),
+                    shell_words::join([
+                        "agent".to_owned(),
+                        "list".to_owned(),
+                        format!("handles={}", json!([handle])),
+                    ]),
+                    None,
                 ))
             }
             2 => Ok(text_response("parent observed terminal result")),
@@ -217,11 +218,15 @@ fn runtime_handle_id(content: &str) -> Option<String> {
         .map(|(handle, _)| handle.to_owned())
 }
 
-fn tool_response(id: &str, name: &str, arguments: serde_json::Value) -> ModelResponse {
+fn command_response(id: &str, command: String, stdin: Option<String>) -> ModelResponse {
+    let mut arguments = json!({ "command": command });
+    if let Some(stdin) = stdin {
+        arguments["stdin"] = stdin.into();
+    }
     ModelResponse::new(
         Message::assistant(vec![MessageContent::ToolCall(ToolCall {
             id: id.to_owned(),
-            name: name.to_owned(),
+            name: "fiasco".to_owned(),
             arguments: arguments.into(),
         })]),
         ModelUsage {

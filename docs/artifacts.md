@@ -101,11 +101,12 @@ no result artifact. An activity-result notice includes `status` and keeps its
 
 ### History-Query Boundaries
 
-History tools use the same envelope when their returned JSON or JSONL is too
-large. For `history_search`, that attachment contains the complete result after
-applying `history_search_max_matches`; it does not contain older matches omitted
-by the query cap. A `truncated: true` search result therefore means “refine the
-regex,” while an artifact preview means “inspect this complete bounded result.”
+History commands use the same envelope when their returned JSON or JSONL is too
+large. For `history search`, that attachment contains the complete result after
+applying `history_search_max_matches`; it does not contain older matches
+omitted by the query cap. A `truncated: true` search result therefore means
+“refine the regex,” while an artifact preview means “inspect this complete
+bounded result.”
 
 Full-text history search reads the exact `ArtifactRef` stored with each
 foreground or asynchronous result in `messages.jsonl`; it does not parse the

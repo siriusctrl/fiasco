@@ -7,12 +7,12 @@ use crate::{
 };
 
 use super::{
-    BashTool, DelegateTool, LoadSkillTool, ReadTool, ToolRegistry, WebSearchTool, WriteTool,
-    handle, history,
+    BashTool, DelegateTool, FiascoTool, LoadSkillTool, ReadTool, ToolRegistry, WebSearchTool,
+    WriteTool, handle, history,
 };
 
-/// Assemble the process-wide tools. Run-scoped history and handle controls are
-/// added later by `RunToolAssembly`.
+/// Assemble process-wide native and command-capable tools. `RunToolAssembly`
+/// separates their provider-visible and hidden roles after adding run scope.
 pub fn build_app_tools(
     skills: Arc<SkillRegistry>,
     web_search: Option<WebSearchTool>,
@@ -29,9 +29,11 @@ pub fn build_app_tools(
     Ok(registry)
 }
 
-/// The one assembly path for the frozen set of tools exposed by an agent run.
+/// The one assembly path for the frozen provider schemas and command catalog
+/// exposed by an agent run.
 pub struct RunToolAssembly {
     registry: ToolRegistry,
+    commands: ToolRegistry,
 }
 
 impl RunToolAssembly {
@@ -40,8 +42,14 @@ impl RunToolAssembly {
         reader: Arc<dyn TrajectoryReader>,
         history_search_max_matches: usize,
     ) -> Result<Self> {
-        history::register(&mut registry, reader, history_search_max_matches)?;
-        Ok(Self { registry })
+        let mut commands = ToolRegistry::default();
+        for name in ["load_skill", "web_search", "mcp"] {
+            if let Some(tool) = registry.remove(name) {
+                commands.register(tool)?;
+            }
+        }
+        history::register(&mut commands, reader, history_search_max_matches)?;
+        Ok(Self { registry, commands })
     }
 
     pub fn contains(&self, name: &str) -> bool {
@@ -49,9 +57,15 @@ impl RunToolAssembly {
     }
 
     pub fn finish(mut self, handles: Arc<RuntimeHandleManager>) -> Result<ToolRegistry> {
-        self.registry
+        self.commands
             .register(Arc::new(DelegateTool::new(handles.clone())))?;
-        handle::register_controls(&mut self.registry, handles)?;
+        handle::register_controls(&mut self.commands, handles)?;
+        let redirect_writer = self
+            .registry
+            .get("write")
+            .unwrap_or_else(|| Arc::new(WriteTool::default()));
+        self.registry
+            .register(Arc::new(FiascoTool::new(self.commands, redirect_writer)?))?;
         Ok(self.registry)
     }
 }

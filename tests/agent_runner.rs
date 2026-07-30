@@ -36,6 +36,22 @@ fn tool_response(calls: Vec<ToolCall>, usage: ModelUsage) -> ModelResponse {
     )
 }
 
+fn fiasco_call<I, S>(id: impl Into<String>, words: I, stdin: Option<String>) -> ToolCall
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut arguments = json!({ "command": shell_words::join(words) });
+    if let Some(stdin) = stdin {
+        arguments["stdin"] = stdin.into();
+    }
+    ToolCall {
+        id: id.into(),
+        name: "fiasco".to_owned(),
+        arguments: arguments.into(),
+    }
+}
+
 fn first_user_text(request: &ModelRequest) -> &str {
     request
         .messages
@@ -419,23 +435,36 @@ impl ModelProvider for RuntimeRestartProvider {
                 if self.child_calls.load(Ordering::SeqCst) != 0 {
                     bail!("root restart launched the child before explicit send_message");
                 }
-                if !request.messages.iter().any(|message| {
-                    message.content.iter().any(|content| {
-                        matches!(
-                            content,
-                            MessageContent::RuntimeReminder { text }
-                                if text.contains("activities and asynchronous tool jobs")
-                        )
+                let restart_reminder = request
+                    .messages
+                    .iter()
+                    .flat_map(|message| &message.content)
+                    .find_map(|content| match content {
+                        MessageContent::RuntimeReminder { text }
+                            if text.contains("activities and asynchronous tool jobs") =>
+                        {
+                            Some(text)
+                        }
+                        _ => None,
                     })
-                }) {
-                    bail!("root restart omitted its crash reminder");
+                    .context("root restart omitted its crash reminder")?;
+                for command in [
+                    "`fiasco`",
+                    "`agent list`",
+                    "`agent inspect`",
+                    "`agent send`",
+                ] {
+                    if !restart_reminder.contains(command) {
+                        bail!("root restart reminder omitted command {command}");
+                    }
+                }
+                for retired_name in ["list_handles", "send_message"] {
+                    if restart_reminder.contains(retired_name) {
+                        bail!("root restart reminder retained old tool name {retired_name}");
+                    }
                 }
                 Ok(tool_response(
-                    vec![ToolCall {
-                        id: "list-after-restart".to_owned(),
-                        name: "list_handles".to_owned(),
-                        arguments: json!({}).into(),
-                    }],
+                    vec![fiasco_call("list-after-restart", ["agent", "list"], None)],
                     ModelUsage::default(),
                 ))
             }
@@ -463,16 +492,17 @@ impl ModelProvider for RuntimeRestartProvider {
                     bail!("process-local tool handle survived restart");
                 }
                 Ok(tool_response(
-                    vec![ToolCall {
-                        id: "send-old-child".to_owned(),
-                        name: "send_message".to_owned(),
-                        arguments: json!({
-                            "handle": self.child_run_id,
-                            "message": "fresh request",
-                            "mode": "followup"
-                        })
-                        .into(),
-                    }],
+                    vec![fiasco_call(
+                        "send-old-child",
+                        [
+                            "agent",
+                            "send",
+                            &format!("handle={}", self.child_run_id),
+                            "mode=followup",
+                            "message=fresh request",
+                        ],
+                        None,
+                    )],
                     ModelUsage::default(),
                 ))
             }
@@ -488,11 +518,11 @@ impl ModelProvider for RuntimeRestartProvider {
                 }
                 self.release_child.notify_one();
                 Ok(tool_response(
-                    vec![ToolCall {
-                        id: "wait-any-after-restart".to_owned(),
-                        name: "wait".to_owned(),
-                        arguments: json!({"handles": []}).into(),
-                    }],
+                    vec![fiasco_call(
+                        "wait-any-after-restart",
+                        ["agent", "wait", "handles=[]"],
+                        None,
+                    )],
                     ModelUsage::default(),
                 ))
             }
@@ -924,16 +954,16 @@ impl ModelProvider for DelegatingProvider {
         if first_user == "delegate work" && !has_result {
             return Ok(tool_response(
                 vec![
-                    ToolCall {
-                        id: "delegate-one".to_owned(),
-                        name: "delegate".to_owned(),
-                        arguments: json!({"name": "child_one", "prompt": "child one"}).into(),
-                    },
-                    ToolCall {
-                        id: "delegate-two".to_owned(),
-                        name: "delegate".to_owned(),
-                        arguments: json!({"name": "child_two", "prompt": "child two"}).into(),
-                    },
+                    fiasco_call(
+                        "delegate-one",
+                        ["agent", "start", "name=child_one", "prompt=child one"],
+                        None,
+                    ),
+                    fiasco_call(
+                        "delegate-two",
+                        ["agent", "start", "name=child_two", "prompt=child two"],
+                        None,
+                    ),
                 ],
                 ModelUsage::default(),
             ));
@@ -1075,11 +1105,11 @@ impl ModelProvider for LastStepBackgroundProvider {
         });
         if !has_delegate_result {
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: "delegate-edge".to_owned(),
-                    name: "delegate".to_owned(),
-                    arguments: json!({"name": "slow_child", "prompt": "slow child"}).into(),
-                }],
+                vec![fiasco_call(
+                    "delegate-edge",
+                    ["agent", "start", "name=slow_child", "prompt=slow child"],
+                    None,
+                )],
                 ModelUsage::default(),
             ));
         }
@@ -1183,11 +1213,11 @@ impl ModelProvider for WaitingProvider {
             let handle =
                 runtime_handle_id(content).context("runtime handle notice omitted handle")?;
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: "wait-call".to_owned(),
-                    name: "wait".to_owned(),
-                    arguments: json!({"handles": [handle]}).into(),
-                }],
+                vec![fiasco_call(
+                    "wait-call",
+                    ["agent", "wait", &format!("handles={}", json!([handle]))],
+                    None,
+                )],
                 ModelUsage::default(),
             ));
         }
@@ -1463,11 +1493,11 @@ impl ModelProvider for SteeringProvider {
                 .and_then(|(_, content)| runtime_handle_id(content))
                 .context("delegate result omitted handle")?;
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: "wait-steered-child".to_owned(),
-                    name: "wait".to_owned(),
-                    arguments: json!({"handles": [handle]}).into(),
-                }],
+                vec![fiasco_call(
+                    "wait-steered-child",
+                    ["agent", "wait", &format!("handles={}", json!([handle]))],
+                    None,
+                )],
                 ModelUsage::default(),
             ));
         }
@@ -1478,25 +1508,31 @@ impl ModelProvider for SteeringProvider {
             self.child_started.notified().await;
             let handle = runtime_handle_id(content).context("delegate result omitted handle")?;
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: "steer-call".to_owned(),
-                    name: "send_message".to_owned(),
-                    arguments: json!({
-                        "handle": handle,
-                        "message": "take the steered path",
-                        "mode": "steer"
-                    })
-                    .into(),
-                }],
+                vec![fiasco_call(
+                    "steer-call",
+                    [
+                        "agent",
+                        "send",
+                        &format!("handle={handle}"),
+                        "mode=steer",
+                        "message=take the steered path",
+                    ],
+                    None,
+                )],
                 ModelUsage::default(),
             ));
         }
         Ok(tool_response(
-            vec![ToolCall {
-                id: "delegate-steered-child".to_owned(),
-                name: "delegate".to_owned(),
-                arguments: json!({"name": "steer_target", "prompt": "child steer target"}).into(),
-            }],
+            vec![fiasco_call(
+                "delegate-steered-child",
+                [
+                    "agent",
+                    "start",
+                    "name=steer_target",
+                    "prompt=child steer target",
+                ],
+                None,
+            )],
             ModelUsage::default(),
         ))
     }
@@ -1646,12 +1682,15 @@ impl ModelProvider for FollowupProvider {
                 bail!("list_handles returned the wrong reusable agent state: {listed}");
             }
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: "close-followup-child".to_owned(),
-                    name: "close".to_owned(),
-                    arguments: json!({"handle": handle.context("delegate result omitted handle")?})
-                        .into(),
-                }],
+                vec![fiasco_call(
+                    "close-followup-child",
+                    [
+                        "agent",
+                        "close",
+                        &handle.context("delegate result omitted handle")?,
+                    ],
+                    None,
+                )],
                 ModelUsage::default(),
             ));
         }
@@ -1669,11 +1708,7 @@ impl ModelProvider for FollowupProvider {
             .count();
         if output_count == 2 {
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: "list-followup-child".to_owned(),
-                    name: "list_handles".to_owned(),
-                    arguments: json!({}).into(),
-                }],
+                vec![fiasco_call("list-followup-child", ["agent", "list"], None)],
                 ModelUsage::default(),
             ));
         }
@@ -1695,42 +1730,49 @@ impl ModelProvider for FollowupProvider {
                 bail!("send_message did not queue the followup: {sent}");
             }
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: "wait-followup-child".to_owned(),
-                    name: "wait".to_owned(),
-                    arguments:
-                        json!({"handles": [handle.context("delegate result omitted handle")?]})
-                            .into(),
-                }],
+                vec![fiasco_call(
+                    "wait-followup-child",
+                    [
+                        "agent",
+                        "wait",
+                        &format!(
+                            "handles={}",
+                            json!([handle.context("delegate result omitted handle")?])
+                        ),
+                    ],
+                    None,
+                )],
                 ModelUsage::default(),
             ));
         }
         if let Some(handle) = handle {
             self.child_started.notified().await;
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: "send-followup-child".to_owned(),
-                    name: "send_message".to_owned(),
-                    arguments: json!({
-                        "handle": handle,
-                        "message": "run the second analysis",
-                        "mode": "followup"
-                    })
-                    .into(),
-                }],
+                vec![fiasco_call(
+                    "send-followup-child",
+                    [
+                        "agent",
+                        "send",
+                        &format!("handle={handle}"),
+                        "mode=followup",
+                        "message=run the second analysis",
+                    ],
+                    None,
+                )],
                 ModelUsage::default(),
             ));
         }
         Ok(tool_response(
-            vec![ToolCall {
-                id: "delegate-followup-child".to_owned(),
-                name: "delegate".to_owned(),
-                arguments: json!({
-                    "name": "followup_target",
-                    "prompt": "child followup target"
-                })
-                .into(),
-            }],
+            vec![fiasco_call(
+                "delegate-followup-child",
+                [
+                    "agent",
+                    "start",
+                    "name=followup_target",
+                    "prompt=child followup target",
+                ],
+                None,
+            )],
             ModelUsage::default(),
         ))
     }
@@ -1884,11 +1926,11 @@ impl ModelProvider for StopThenSendProvider {
                 let handle = runtime_handle_id(content).context("hanging result omitted handle")?;
                 self.child_background_started.notify_one();
                 return Ok(tool_response(
-                    vec![ToolCall {
-                        id: "wait-child-hang".to_owned(),
-                        name: "wait".to_owned(),
-                        arguments: json!({"handles": [handle]}).into(),
-                    }],
+                    vec![fiasco_call(
+                        "wait-child-hang",
+                        ["agent", "wait", &format!("handles={}", json!([handle]))],
+                        None,
+                    )],
                     ModelUsage::default(),
                 ));
             }
@@ -1944,14 +1986,15 @@ impl ModelProvider for StopThenSendProvider {
         });
         if completed_after_stop {
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: "close-stopped-child".to_owned(),
-                    name: "close".to_owned(),
-                    arguments: json!({
-                        "handle": handle.context("delegate result omitted handle")?
-                    })
-                    .into(),
-                }],
+                vec![fiasco_call(
+                    "close-stopped-child",
+                    [
+                        "agent",
+                        "close",
+                        &handle.context("delegate result omitted handle")?,
+                    ],
+                    None,
+                )],
                 ModelUsage::default(),
             ));
         }
@@ -1967,14 +2010,18 @@ impl ModelProvider for StopThenSendProvider {
             }
             let wait = self.wait_calls.fetch_add(1, Ordering::SeqCst);
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: format!("wait-stopped-child-{wait}"),
-                    name: "wait".to_owned(),
-                    arguments: json!({
-                        "handles": [handle.context("delegate result omitted handle")?]
-                    })
-                    .into(),
-                }],
+                vec![fiasco_call(
+                    format!("wait-stopped-child-{wait}"),
+                    [
+                        "agent",
+                        "wait",
+                        &format!(
+                            "handles={}",
+                            json!([handle.context("delegate result omitted handle")?])
+                        ),
+                    ],
+                    None,
+                )],
                 ModelUsage::default(),
             ));
         }
@@ -1984,14 +2031,18 @@ impl ModelProvider for StopThenSendProvider {
         {
             let wait = self.wait_calls.fetch_add(1, Ordering::SeqCst);
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: format!("wait-stopped-child-{wait}"),
-                    name: "wait".to_owned(),
-                    arguments: json!({
-                        "handles": [handle.context("delegate result omitted handle")?]
-                    })
-                    .into(),
-                }],
+                vec![fiasco_call(
+                    format!("wait-stopped-child-{wait}"),
+                    [
+                        "agent",
+                        "wait",
+                        &format!(
+                            "handles={}",
+                            json!([handle.context("delegate result omitted handle")?])
+                        ),
+                    ],
+                    None,
+                )],
                 ModelUsage::default(),
             ));
         }
@@ -2004,40 +2055,41 @@ impl ModelProvider for StopThenSendProvider {
                 bail!("stop returned the wrong reusable state: {stopped}");
             }
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: "send-stopped-child".to_owned(),
-                    name: "send_message".to_owned(),
-                    arguments: json!({
-                        "handle": handle.context("delegate result omitted handle")?,
-                        "message": "resume immediately",
-                        "mode": "followup"
-                    })
-                    .into(),
-                }],
+                vec![fiasco_call(
+                    "send-stopped-child",
+                    [
+                        "agent",
+                        "send",
+                        &format!(
+                            "handle={}",
+                            handle.context("delegate result omitted handle")?
+                        ),
+                        "mode=followup",
+                        "message=resume immediately",
+                    ],
+                    None,
+                )],
                 ModelUsage::default(),
             ));
         }
         if let Some(handle) = handle {
             self.child_background_started.notified().await;
             return Ok(tool_response(
-                vec![ToolCall {
-                    id: "stop-child".to_owned(),
-                    name: "stop".to_owned(),
-                    arguments: json!({"handle": handle}).into(),
-                }],
+                vec![fiasco_call("stop-child", ["agent", "stop", &handle], None)],
                 ModelUsage::default(),
             ));
         }
         Ok(tool_response(
-            vec![ToolCall {
-                id: "delegate-stop-child".to_owned(),
-                name: "delegate".to_owned(),
-                arguments: json!({
-                    "name": "stop_target",
-                    "prompt": "child stop target"
-                })
-                .into(),
-            }],
+            vec![fiasco_call(
+                "delegate-stop-child",
+                [
+                    "agent",
+                    "start",
+                    "name=stop_target",
+                    "prompt=child stop target",
+                ],
+                None,
+            )],
             ModelUsage::default(),
         ))
     }

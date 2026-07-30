@@ -14,20 +14,22 @@ in this registry and Rust inserts it into the child's initial runtime reminder.
 The stable system prompt defines only tool-agnostic behavior:
 user-intent boundaries, evidence, schema authority, concurrent-call semantics,
 instruction precedence, process permissions, and final reporting. Tool names
-and feature workflows do not belong in that prefix, so removing a tool schema
-also removes its prompt influence. The initial runtime reminder carries
-concrete run state and concise feature guidance only when that feature is
-present. Its child guidance points to the paired, self-contained delegated
-task. Keeping the stable rules in the shared system prefix preserves
+and feature workflows do not belong in that prefix, so removing a native tool
+or hidden command also removes its prompt influence. The initial runtime
+reminder carries concrete run state and concise feature guidance only when that
+feature is present. Its child guidance points to the paired, self-contained
+delegated task. Keeping the stable rules in the shared system prefix preserves
 byte-identical Root and GeneralTask prefixes.
 
-Every local model-facing tool adapter keeps a typed `tool.yaml` beside its Rust
-module. Standalone adapters live at `src/tools/<tool>/`; cohesive handle, history,
-and graph families live at `src/tools/<family>/<member>/`. Every manifest still
-declares the complete provider-visible name rather than deriving it from its
-path. `description` states purpose, usage, side effects, and constraints;
-`returns` states the successful result shape, interpretation, and tool-specific
-follow-up. The loader joins them as
+Every local tool adapter keeps a typed `tool.yaml` beside its Rust module.
+Standalone adapters live at `src/tools/<tool>/`; cohesive handle and history
+families live at `src/tools/<family>/<member>/`. Every manifest declares its
+complete deterministic lookup name rather than deriving it from its path.
+Native manifests become provider schemas. Hidden command manifests remain the
+authoritative argument and execution contracts and supply route-specific
+`fiasco help`. `description` states purpose, usage, side effects, and
+constraints; `returns` states the successful result shape, interpretation, and
+tool-specific follow-up. The loader joins them as
 `<description>\n\nReturns: <returns>` for the standard provider description. The
 Rust module owns arguments, semantic validation, and execution. Domain state
 stays in its subsystem: for example, handle adapters call
@@ -41,9 +43,10 @@ JSON Schema. Examples explain shape only; Rust remains authoritative for
 semantic validation.
 
 These are compile-time assets, not runtime overrides or dynamically discovered
-plugins. External executable tools integrate through one fixed `mcp` manifest.
-Their exact server-provided catalogs stay in progressively documented MCP
-artifacts rather than entering the provider tool-schema prefix.
+plugins. External executable tools integrate through one fixed internal `mcp`
+adapter reached through the provider-visible `fiasco` command surface. Their
+exact server-provided catalogs stay in progressively documented MCP artifacts
+rather than entering the provider tool-schema prefix.
 
 `returns` is required even when one short sentence is sufficient. A manifest
 should explain its own behavior without assuming that a sibling tool is
@@ -53,16 +56,18 @@ behavior stays in runtime-generated result guidance rather than being copied
 into every manifest. This authoring split does not add a private provider field
 or claim a formal output schema.
 
-Tool descriptions are sent through the provider's sorted tool-schema field.
-Core history, delegation, and handle-control schemas are present in every Root
-and GeneralTask run. Optional web search and the single MCP command capability
-are selected during the run-assembly path. Configured MCP source-map metadata
-enters the dynamic reminder. Memory uses ordinary file tools and therefore adds
-no schema. Remaining delegation depth is runtime state, not schema membership.
+Native tool descriptions are sent through the provider's sorted tool-schema
+field. The `fiasco` description contains the frozen enabled route catalog;
+route-specific details remain progressively available through `fiasco help`.
+Core history, delegation, and handle-control routes are present in every Root
+and GeneralTask run. Optional web search and MCP routes are selected during the
+run-assembly path. Configured MCP source-map metadata enters the dynamic
+reminder. Memory uses ordinary file tools and therefore adds no schema or
+command. Remaining delegation depth is runtime state, not schema membership.
 Compaction reuses that system/tool prefix and adds the `compaction_request`
 prompt as the final user message.
 Normal context after a successful checkpoint adds `compaction_resume` inside a
 synthetic user runtime reminder immediately after the exact assistant state.
-Every local manifest is static. Startup integrations may add complete external
-or optional specs, but remaining delegation depth never changes built-in
-membership.
+Every local manifest is static. Startup integrations may add optional command
+routes before the run is frozen, but remaining delegation depth never changes
+provider-schema or command-catalog membership.

@@ -24,10 +24,15 @@
 - `src/model/openai_oauth_credentials.rs`: auth-file, Codex import, and JWT helpers.
 - `src/model/openai_oauth_device.rs`: device-code request and polling.
 - `src/model/anthropic_compatible.rs`: Messages adapter.
-- `src/tools/mod.rs`: tool contract and deterministic sorted registry.
+- `src/tools/mod.rs`: tool contract and deterministic sorted registry used by
+  both provider-visible and hidden command assemblies.
 - `src/tools/manifest.rs`: strict parser for embedded local `tool.yaml`
   contracts.
-- `src/tools/assembly.rs`: the single process/run tool-assembly path.
+- `src/tools/assembly.rs`: the single process/run path that separates native
+  provider tools from hidden command tools.
+- `src/tools/command/`: the provider-visible `fiasco` adapter, fixed route
+  catalog, CLI-like parser, schema-driven argument conversion, in-process
+  pipeline, help, and terminal redirect.
 - `src/tools/{bash,delegate,load_skill,read,web_search,write}/`: standalone local
   adapters with a typed compile-time `tool.yaml` beside their Rust code.
 - `src/tools/history/{read,search}/`: compacted-history adapters;
@@ -35,7 +40,7 @@
 - `src/tools/handle/{close,inspect,list,send,stop,wait}/`: runtime-handle controls;
   `src/tools/handle/mod.rs` registers the complete family and owns their shared
   result projection.
-- Every leaf manifest contains its complete provider-visible name, purpose,
+- Every leaf manifest contains its complete deterministic lookup name, purpose,
   return guidance, and input schema; directory paths never derive names.
 - `src/trajectory.rs` and `src/trajectory/`: provider-neutral history reader
   contracts plus local message/artifact search.
@@ -56,13 +61,14 @@
 - `src/storage/trajectory.rs`: classified append-only messages and
   compacted-history loading.
 - `src/skills/mod.rs`: Agent Skills metadata discovery and body/path loading;
-  the model-facing adapter is in `src/tools/load_skill/`.
+  the hidden command adapter is in `src/tools/load_skill/`.
 - `skills/orchestrate-with-graphs/`: installable guidance for maintaining
   workspace YAML graphs as an orchestrator mental model with ordinary tools.
 - `skills/register-mcp/`: installable workflow for capturing, documenting,
   exploring, and validating progressive MCP artifacts.
 - `src/mcp.rs` and `src/mcp/`: rmcp stdio client lifecycle, MCP artifact
-  loading, command compilation, result rendering, and the fixed `mcp` adapter.
+  loading, command compilation, result rendering, and the fixed internal `mcp`
+  adapter reached through `fiasco`.
 - `src/hooks.rs`: deterministic command-hook pipeline.
 - `src/memory.rs`: user/project Markdown memory paths and reminder text.
 - `src/config.rs`: TOML configuration.

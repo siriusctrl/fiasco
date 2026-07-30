@@ -79,7 +79,7 @@ instead of synthesizing tool errors or replaying the discarded turn.
 Restart does not reconstruct process-local handle state. Tool jobs, active child
 work, mailbox input, and undelivered output are discarded; the root receives an
 unconditional crash notice and decides what to retry. Direct child runs remain
-discoverable as durable open threads. Their first explicit `send_message`
+discoverable as durable open threads. Their first explicit `agent send`
 adds a child crash reminder and starts a new activity from the remaining
 context. This assumes a supervisor has killed the old local process tree before
 resume. See
@@ -196,11 +196,12 @@ and making raw transcripts or artifacts equivalent to curated memory. See
 
 Direct calls from one assistant message start concurrently under one shared
 foreground window. Results remain in original call order; only unfinished exact
-futures receive process-local `j_<ulid>` handles. `delegate` starts a reusable
-GeneralTask whose handle is its durable child run id. `list_handles` handles
-both discovery and named snapshots; wait-any `wait`, `inspect`, mode-required
-`send_message`, `stop`, and `close` complete the control surface. `close` also
-cancels and joins active agent work before making the durable lifetime closed.
+futures receive process-local `j_<ulid>` handles. `agent start` starts a
+reusable GeneralTask whose handle is its durable child run id. `agent list`
+handles both discovery and named snapshots; wait-any `agent wait`, `agent
+inspect`, mode-required `agent send`, `agent stop`, and `agent close` complete
+the control surface. Close also cancels and joins active agent work before
+making the durable lifetime closed.
 Only agent identity, name, transcript, profile, remaining delegation capacity,
 and open/closed lifetime survive a process restart; activity coordination does
 not. Agent loops have no arbitrary model-step cap, and asynchronous work has no
@@ -271,13 +272,13 @@ stable GeneralTask guidance are snapshotted into a synthetic runtime reminder
 at the start of each run; lowercase `agents.md` is used only when `AGENTS.md`
 is absent. The delegated task text follows in the same initial user message as
 ordinary content. Tool descriptions and feature workflows
-remain in sorted tool schemas rather than being duplicated in the system
-prompt. Core history schemas are present from the first normal call.
-Root and GeneralTask use the same built-in schema set and freeze it for the run;
-compaction reuses the same system and schemas. Remaining delegation depth is
-persisted runtime state and never changes schema membership. Optional startup
-capabilities are resolved before the run starts. Memory paths do not alter the
-tool schema. See
+remain in native provider schemas or internal command manifests rather than
+being duplicated in the system prompt. The `fiasco` schema and core history
+routes are present from the first normal call. Root and GeneralTask use the
+same provider schema set and freeze it for the run; compaction reuses the same
+system and schemas. Remaining delegation depth is persisted runtime state and
+never changes schema membership. Optional startup command routes are resolved
+before the run starts. Memory paths do not alter the tool schema. See
 [ADR 0024](adr/0024-freeze-built-in-schemas-across-agent-roles.md).
 
 The system prompt contains one stable rule for model modalities, while the
@@ -287,11 +288,36 @@ its execution boundary when `image` is absent. Rejected: endpoint probing,
 model-name allowlists, and per-agent dynamic vision routing. See
 [ADR 0023](adr/0023-declare-model-input-modalities.md).
 
-Rejected for launch: conditionally adding history tools and hot-reloading
-project context or tool definitions inside a run. Appending revisions would
+Rejected for launch: conditionally adding history routes and hot-reloading
+project context or command definitions inside a run. Appending revisions would
 grow context, while replacing earlier messages would break the durable
-transcript boundary and provider prefix-cache
-reuse. See [ADR 0004](adr/0004-stable-agent-prefix-and-core-history-tools.md).
+transcript boundary and provider prefix-cache reuse. See
+[ADR 0004](adr/0004-stable-agent-prefix-and-core-history-tools.md).
+
+## In-Process Command Surface
+
+The normal built-in provider surface is `bash`, `read`, `write`, and one
+`fiasco` command adapter. Skills, web search, history, delegation, handle
+controls, and MCP remain typed `Tool` implementations but live in a hidden
+run-scoped registry. This keeps live handles and sessionful MCP clients in the
+owning process while preventing the provider schema set from growing with each
+harness capability.
+
+`fiasco` supports quoted words, `name=value`, exact optional stdin, linear
+buffered fail-fast `|`, and one terminal atomic `> path`. A complete stage
+output can fill exactly one missing required argument or an explicit `-`
+placeholder. Ambiguous input, binary/image composition, append, and general
+shell syntax are rejected. The native `bash` tool remains the real-shell
+escape hatch.
+
+The whole command is one provider call. Hooks, events, promotion, cancellation,
+result limiting, and artifacts apply to that outer call; hidden stages do not
+create transcript tool pairs. Earlier stage side effects are not transactional.
+Rejected for this boundary: child-process Fiasco commands that require server
+mode to recover live state, a complete shell parser, per-command output-path
+arguments, streaming pipelines, and a general plugin protocol.
+
+See [ADR 0050](adr/0050-in-process-command-surface.md).
 
 ## Compile-Time Prompt Assets
 
@@ -301,12 +327,12 @@ guidance, and input schema in one typed `tool.yaml` beside its adapter. The
 loader joins the two prose fields into the provider's standard description.
 These assets are embedded with `include_str!` and parsed strictly. Rust remains
 authoritative for prompt assembly, argument validation, and execution.
-Every local model-facing adapter keeps its complete manifest beside its Rust
-module. Standalone tools stay directly under `src/tools`; cohesive task,
-history, and graph adapters are grouped by family without deriving model-visible
-names from paths. Domain engines remain in their focused subsystems. Process and
-run capabilities are assembled through one explicit path; ordinary tools are called
-directly, while `delegate` and the handle controls are complete static adapters.
+Every local adapter keeps its complete manifest beside its Rust module,
+including adapters reached only through the command surface. Standalone tools
+stay directly under `src/tools`; cohesive handle and history adapters are
+grouped by family without deriving lookup names from paths. Domain engines
+remain in their focused subsystems. Process and run capabilities are assembled
+through one explicit path into native provider tools and hidden command tools.
 
 See [ADR 0019](adr/0019-group-related-tool-adapters.md),
 [ADR 0016](adr/0016-separate-tool-purpose-and-return-guidance.md),
@@ -317,14 +343,15 @@ ownership decisions.
 
 ## Progressive MCP Artifacts
 
-Configured MCP servers expose one fixed `mcp` command schema. Their exact
-remote `tools/list` catalogs stay in `catalog.json`, while model-generated
-`MCP.md` files provide compact namespace metadata and capability-oriented
-source maps. Detailed references may aggregate commands that share objects,
-identifiers, or workflows; the runtime does not interpret that grouping.
+Configured MCP servers expose one fixed internal MCP adapter through the
+`fiasco mcp` route. Their exact remote `tools/list` catalogs stay in
+`catalog.json`, while model-generated `MCP.md` files provide compact namespace
+metadata and capability-oriented source maps. Detailed references may aggregate
+commands that share objects, identifiers, or workflows; the runtime does not
+interpret that grouping.
 
-The model-facing adapter, authoring CLI, and installable `register-mcp` Skill
-all rely on the same Rust artifact loader and command compiler. Rejected:
+The internal command adapter, authoring CLI, and installable `register-mcp`
+Skill all rely on the same Rust artifact loader and command compiler. Rejected:
 dynamic per-tool provider schemas, a second list/load knowledge API inside
 `mcp`, startup LLM summarization, artifact hashes, hot reload, and automatic
 catalog repair.

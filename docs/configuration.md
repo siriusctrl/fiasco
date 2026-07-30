@@ -149,9 +149,10 @@ history_search_max_matches = 50
 
 `compact_at_tokens` enables automatic compacted-state creation and must be
 greater than zero. It does not enable tools or change the normal system prompt:
-every normal agent profile receives `history_search` and `history_read` from its first
-provider call even when the setting is omitted. `context_window_tokens` is the
-model's optional nominal full context window. When both are set,
+every normal agent profile receives the `fiasco` schema with `history search`
+and `history read` routes from its first provider call even when the setting is
+omitted. `context_window_tokens` is the model's optional nominal full context
+window. When both are set,
 `compact_at_tokens` must be smaller, and `runtime.max_output_tokens` must be set
 so the Root profile has an explicit output reserve. All limits must be positive. Fiasco
 estimates system, frozen schemas, and active messages from the first request;
@@ -177,26 +178,28 @@ A normal request with an active state inserts the stable `compaction_resume`
 runtime reminder immediately after that assistant state. It is not persisted
 and prevents the state from being mistaken for a final answer or a fresh
 compaction request.
-A fixed profile without both history tools and at least one of `read` or `bash`
-would keep its full context instead of compacting without an exact-recovery
-path.
+A fixed profile without both history command adapters and at least one of
+`read` or `bash` would keep its full context instead of compacting without an
+exact-recovery path.
 
-Root and GeneralTask each assemble the same sorted built-in registry and freeze
-it before their first provider call. `delegate` and all handle controls remain in
-that registry at every depth. Runs persist only `root` or `general_task` as the
-role profile. Exact remaining delegation depth is frozen in run metadata as the
-sole delegation authority and appears in the runtime reminder; `delegate`
-returns a local error at zero. Compaction reuses the same schemas but never
-executes a returned tool call. Optional `web_search` and the single fixed `mcp`
-schema depend on startup configuration. Remote MCP schemas stay outside the
-provider prefix. Memory uses the ordinary file tools and adds no schema. None
-changes during the run.
+Root and GeneralTask each assemble the same sorted provider registry and hidden
+command registry and freeze both before their first provider call. The
+`fiasco` routes for delegation and handle controls remain available at every
+depth. Runs persist only `root` or `general_task` as the role profile. Exact
+remaining delegation depth is frozen in run metadata as the sole delegation
+authority and appears in the runtime reminder; `agent start` returns a local
+error at zero. Compaction reuses the same schemas but never executes a returned
+tool call. Optional web search and MCP change the `fiasco` command catalog at
+startup rather than provider schema membership. Remote MCP schemas stay outside
+the provider prefix. Memory uses the ordinary file tools and adds no schema or
+command. None changes during the run.
 
 `history_search_max_matches` is a positive, per-query cap for newest-first
 regex matches over messages removed from the active context. It is not an
 artifact byte limit: matches omitted by this cap are not placed in the result
-artifact. `history_search` and `history_read` have no cursor and never modify
-the transcript; refine the regex or read a bounded window around a returned ref.
+artifact. `history search` and `history read` have no cursor and never modify
+the transcript; refine the regex or read a bounded window around a returned
+ref.
 The local reader uses `rg` from `PATH` to scan linked full-text artifacts
 without loading them into the Rust heap; message-only matching does not require
 that subprocess. Remote readers may implement the same interface directly.
@@ -221,12 +224,12 @@ direct calls in an assistant message, not an execution deadline per call. The
 batch returns early when all calls settle. When the window expires, each
 already-running unfinished direct tool continues under a process-local handle
 and the model receives a status-less runtime notice with its handle and name.
-Delegated agents have no harness execution deadline. Each `wait` call returns
-when any selected handle has a result or status change, or after at most
-`wait_timeout_seconds`, without cancelling unfinished work; this value must be
-strictly lower than the foreground window. `stop` interrupts a tool job or only
-the current activity of a reusable agent; the stopped agent stays idle and
-paused until its next explicit `send_message`.
+Delegated agents have no harness execution deadline. Each `agent wait` command
+returns when any selected handle has a result or status change, or after at
+most `wait_timeout_seconds`, without cancelling unfinished work; this value
+must be strictly lower than the foreground window. `agent stop` interrupts a
+tool job or only the current activity of a reusable agent; the stopped agent
+stays idle and paused until its next explicit `agent send`.
 `max_parallel_subagents` limits delegated child execution in one parent run;
 already-running direct calls are not paused when they are promoted. On Unix,
 cancelling `bash` terminates its process-group descendants too.
@@ -307,7 +310,8 @@ contain:
 
 The frontmatter name must match the configuration key. The runtime puts only
 that name, description, and the absolute `MCP.md` path into the initial
-reminder. It registers one fixed `mcp` schema rather than every remote schema.
+reminder. It registers one internal MCP adapter behind the fixed provider
+`fiasco` schema rather than registering every remote schema.
 
 Use `fiasco mcp capture <name>` to write `catalog.json`,
 `fiasco mcp check <name> [--live]` to validate the artifact,

@@ -10,12 +10,14 @@ platform framework.
 job/CLI
   -> AgentRunner
      -> ModelProvider
-     -> ToolRegistry
-        -> local Tool adapters grouped where related
-        -> one namespaced MCP command adapter
-        -> RuntimeHandleManager
-           -> promoted direct Tool future
-           -> delegated child AgentRunner
+     -> provider ToolRegistry
+        -> bash / read / write
+        -> fiasco command adapter
+           -> hidden command ToolRegistry
+              -> skills / web / history / MCP
+              -> RuntimeHandleManager
+                 -> promoted direct Tool future
+                 -> delegated child AgentRunner
      -> ArtifactStore
      -> RunDirStore
         -> compacted-state metadata / compacted-history reader
@@ -52,28 +54,54 @@ Canonical user content can include image attachments. Adapters project those
 to native Chat `image_url`, Responses `input_image`, or Anthropic base64 source
 blocks; the agent loop does not assemble provider wire shapes.
 
-### Tool registry
+### Tool and command registries
 
-Every model-callable action implements `Tool`. Local adapters and the fixed MCP
-command adapter share the same registry. Memory uses the ordinary file tools.
-The registry caches each adapter's spec at registration, stays sorted, and is
-frozen before the first normal provider call so tool schema order and
-membership remain deterministic across requests.
+Every executable capability still implements `Tool`, but normal runs assemble
+two registries. The provider registry contains the native `bash`, `read`,
+`write`, and `fiasco` schemas. A hidden run-scoped command registry contains
+skills, optional web search, history, delegation, handle controls, and optional
+MCP. Explicitly injected application tools may remain provider-visible.
 
-This registry is the capability router: it maps a model-returned tool name to
-one implementation and one schema. It does not decide what to do or create a
-second planning layer; the model selects a capability, and the runner performs
-the deterministic lookup. Duplicate names fail during startup instead of
-silently replacing an existing capability.
+Both registries cache each adapter's spec at registration, remain sorted, and
+reject duplicate names. Only the provider registry is frozen into the model
+request and resume hash. Root, GeneralTask, and compaction calls therefore see
+one deterministic provider schema set even when the internal capability
+catalog grows.
 
-Every local model-facing adapter keeps its typed compile-time `tool.yaml` beside
-its Rust module. Standalone tools live directly under `src/tools/<tool>/`;
-cohesive handle and history families live under
-`src/tools/<family>/<member>/`. The manifest always contains the complete
-provider-visible name; paths never derive names. The common loader validates
-both prose fields and joins them with a `Returns:` semantic boundary into the
-standard provider description. Its Rust module owns arguments, semantic
-validation, and execution.
+`fiasco` is a syntax and composition adapter, not a second planner or agent
+loop. It resolves a fixed enabled route table, compiles CLI-like arguments
+against each internal tool's JSON schema, and calls that `Tool` in the owning
+run process. Its grammar supports quoted words, a linear buffered fail-fast
+pipeline, exact stdin substitution, and one terminal atomic redirect:
+
+```text
+history search result-old
+history search result-old | agent send handle=01J... mode=followup message=-
+history read m37 before=2 after=2 > recovered.jsonl
+```
+
+It is not a shell: `&&`, `||`, append, variables, globbing, command
+substitution, loops, background jobs, and file-descriptor redirection are not
+implemented. The native `bash` tool remains available when real shell semantics
+are required. Pipeline stages are sequential and pass complete pre-artifact
+output. UTF-8 is required when output becomes a typed argument or file, and
+native image attachments cannot enter a pipeline.
+
+The complete command is one provider tool call. Hooks, runtime events,
+foreground promotion, cancellation, transcript identity, result limiting, and
+artifact preservation apply to the outer `fiasco` call; hidden stages do not
+emit separate assistant calls or envelopes. A terminal redirect reuses the
+native `write` contract and occurs only after all stages succeed. Earlier stage
+side effects are not rolled back after a later failure.
+
+Every local adapter keeps its typed compile-time `tool.yaml` beside its Rust
+module, including hidden command adapters. Standalone tools live directly under
+`src/tools/<tool>/`; cohesive handle and history families live under
+`src/tools/<family>/<member>/`. The manifest name is the internal deterministic
+lookup name; paths never derive names. The common loader validates both prose
+fields and joins them with a `Returns:` semantic boundary. `fiasco help`
+derives its enabled catalog and route-specific help from the same specs, so the
+Rust module continues to own arguments, semantic validation, and execution.
 The base `bash` adapter uses a non-login shell and inherits the fiasco
 process environment, avoiding per-call profile output and PATH rewrites.
 The base `read` adapter returns up to 400 text lines under a 65,536-byte cap.
@@ -87,24 +115,22 @@ execution coordination is owned by `RuntimeHandleManager`, skills by
 `TrajectoryReader`. MCP artifact loading, command compilation, client
 lifecycle, and the thin command adapter remain in `mcp.rs` and `src/mcp/`.
 
-`build_app_tools` assembles process-wide local capabilities. `RunToolAssembly`
-is the single path that adds run-scoped history, handle controls, and `delegate`
-for every Root and GeneralTask run. The `history` and `handle` family modules
-explicitly register their complete member sets; assembly does not repeat each
-leaf constructor. Ordinary tools are called directly; only an unfinished direct
-call receives a runtime handle through foreground promotion.
-The model-visible schema set and resume hash therefore commit the same fixed
-capability contract without a dynamic spawn allowlist.
+`build_app_tools` assembles process-wide capabilities. `RunToolAssembly` is the
+single path that moves Fiasco-owned command adapters out of the provider
+registry, adds run-scoped history, delegation, and handle controls, and
+registers one `fiasco` adapter for every Root and GeneralTask run. The `history`
+and `handle` family modules explicitly register their complete member sets.
+Only an unfinished outer provider call receives a runtime handle through
+foreground promotion.
 
-The persisted Root and GeneralTask profiles have one identical built-in
-capability set. Each normal run registers `history_search` and
-`history_read` before its first call regardless of whether automatic compaction
-is configured, plus `delegate` and all handle controls. Remaining delegation
-depth is persisted, shown in the runtime reminder, and checked by `delegate`
-before child creation; zero returns a local error. Optional `web_search` and the
-single `mcp` tool depend on startup configuration. Memory paths do not add a
-tool schema.
-The selected schemas do not appear or disappear during one run.
+The persisted Root and GeneralTask profiles have one identical command
+capability set. History is available before the first call whether automatic
+compaction is configured or not. Remaining delegation depth is persisted,
+shown in the runtime reminder, and checked by the internal `delegate` adapter
+before child creation; zero returns a local error. Optional web search and MCP
+add routes to the `fiasco` description before the run starts. Memory paths add
+no schema or command. Neither provider schemas nor enabled routes change during
+one run.
 
 ### MCP artifacts
 
@@ -116,17 +142,18 @@ Markdown may group highly related commands around shared objects and workflows;
 the runtime never interprets that grouping.
 
 Startup loads every configured artifact and connects its server, then registers
-one fixed `mcp` tool with one command string. The initial runtime reminder lists
-only each namespace, description, and absolute source-map path. The model uses
-ordinary `read` calls for progressive documentation and invokes:
+one fixed internal MCP adapter behind the `fiasco` `mcp` route. The initial
+runtime reminder lists only each namespace, description, and absolute
+source-map path. The model uses ordinary `read` calls for progressive
+documentation and invokes:
 
 ```text
-<namespace> <remote-tool> [name=value ...]
+mcp <namespace> <remote-tool> [name=value ...]
 ```
 
 The shared compiler applies shell quoting, resolves the captured exact remote
 tool name, and converts top-level values using its input schema. `mcp compile`,
-`mcp call`, and the model-facing adapter use this same implementation. Text MCP
+`mcp call`, and the internal command adapter use this same implementation. Text MCP
 content returns directly without a harness JSON envelope; structured-only data
 returns as its JSON value, while rich non-text results retain the exact MCP
 result shape for artifact handling.
@@ -323,24 +350,25 @@ active compaction boundary and is not appended to the trajectory.
 The trigger uses a provider-neutral request estimate from the first call and
 adopts provider-reported input usage whenever available. Configuring
 `compact_at_tokens` controls compacted-state creation only; the normal system
-prompt and history-tool schemas are already present and remain unchanged. The
+prompt, `fiasco` schema, and history command routes are already present and
+remain unchanged. The
 additional request uses the same provider, model, system, and frozen schemas,
 then appends one compaction user instruction. A returned tool call or empty
 state is never executed or committed; fiasco records the invalid attempt and
 retries that compaction request once.
 Fiasco does not implement provider/server-side compaction.
 
-`history_search` and `history_read` expose a read-only `TrajectoryReader`
-boundary. The local implementation searches only messages outside the active
-context, plus full textual artifacts linked to their tool results. Search uses
-Rust regular expressions, returns newest matches up to a configured cap, and
-has no cursor. Each match returns a sequence-addressed ref, a `source` that
-distinguishes inline message content from a linked complete artifact, and a
-bounded snippet. Read accepts that ref and a bounded before/after window,
-returning chronological Chat-compatible JSONL and expanding when necessary to
-preserve tool-call/result pairs. A future remote or database-backed trajectory
-can implement the same reader without granting the model filesystem write
-access.
+The `history search` and `history read` command routes expose a read-only
+`TrajectoryReader` boundary. The local implementation searches only messages
+outside the active context, plus full textual artifacts linked to their tool
+results. Search uses Rust regular expressions, returns newest matches up to a
+configured cap, and has no cursor. Each match returns a sequence-addressed ref,
+a `source` that distinguishes inline message content from a linked complete
+artifact, and a bounded snippet. Read accepts that ref and a bounded
+before/after window, returning chronological Chat-compatible JSONL and
+expanding when necessary to preserve tool-call/result pairs. A future remote or
+database-backed trajectory can implement the same reader without granting the
+model filesystem write access.
 
 For linked local artifacts, the query reads the structured `ArtifactRef` from
 the completed message content. It does not parse the
@@ -355,8 +383,8 @@ per history query. Artifact contents remain streamed and bounded. If run sizes
 outgrow this simple backend, an indexed local or remote `TrajectoryReader` can
 replace it without changing the model-facing tools.
 
-A normal profile compacts only when both history tools and at least one generic
-artifact inspection tool (`read` or `bash`) remain available,
+A normal profile compacts only when both history command adapters and at least
+one generic artifact inspection tool (`read` or `bash`) remain available,
 preserving exact recovery as part of the compaction contract.
 
 ### Skills and instructions
@@ -366,15 +394,16 @@ the typed `prompts/agents.yaml` registry. YAML folded scalars remove source-only
 line wrapping before Rust receives each value. `src/prompts.rs` parses the
 embedded registry once and rejects unknown or empty fields. Rust owns prompt
 precedence, section ordering, dynamic values, and runtime-reminder framing.
-Each typed tool manifest owns its feature workflow, so ablating a tool schema
-also removes its instructions. Concrete run state and feature availability may
-still appear in dynamic reminders and results. The first user message's
+Each typed tool manifest owns its feature workflow. Ablating a command adapter
+also removes its route and catalog guidance. Concrete run state and feature
+availability may still appear in dynamic reminders and results. The first user message's
 ordinary text `content` carries a
 `<runtime-reminder>` block with model/workspace state, the workspace
 `AGENTS.md` or lowercase fallback, sorted skill metadata, configured MCP
 source-map metadata, memory paths, and optional delegated instructions,
 followed by the original request. A skill body enters the
-conversation only after the model calls `load_skill`. That result omits the
+conversation only after the model invokes `fiasco` with `skill load`. That
+result omits the
 already-catalogued name and description, and includes the absolute skill
 directory so relative references remain resolvable. The `SKILL.md` entry path
 is implied by that directory and is not repeated.
@@ -422,19 +451,19 @@ ids; events may show actual completion order. A promoted handle is only a
 running acknowledgement, so dependent work waits for the separate result
 message correlated by that handle.
 
-`delegate` starts a reusable GeneralTask agent immediately and returns its
-child run id as the handle. `list_handles` discovers durable direct children
-and overlays current-process tool jobs and activity state. With named handles
-it returns their current snapshots; `include_closed` extends all-handle
-discovery. `wait` uses wait-any semantics: it returns when any selected handle
-has a result or status change, or when its bounded interval expires. `inspect`,
-`send_message`, and `close` operate only on agents. Inspect
+`agent start` starts a reusable GeneralTask agent immediately and returns its
+child run id as the handle. `agent list` discovers durable direct children and
+overlays current-process tool jobs and activity state. With named handles it
+returns their current snapshots; `include_closed` extends all-handle
+discovery. `agent wait` uses wait-any semantics: it returns when any selected
+handle has a result or status change, or when its bounded interval expires.
+`agent inspect`, `agent send`, and `agent close` operate only on agents. Inspect
 projects a bounded page of the child's durable messages. Send queues a normal
 user message with an explicit mode: `steer` makes it available after the
 current complete tool batch, while `followup` waits for the current activity
-boundary. An activity result leaves the thread idle; `stop` ends only current
-work, while `close` rejects new input, cancels and joins current work when
-necessary, clears queued input, and then durably closes the thread.
+boundary. An activity result leaves the thread idle; `agent stop` ends only
+current work, while `agent close` rejects new input, cancels and joins current
+work when necessary, clears queued input, and then durably closes the thread.
 Asynchronous work has no hard execution deadline.
 
 Every delegated child is isolated. It starts from its own runtime reminder and
@@ -446,9 +475,9 @@ resumes solely from its own run messages through the same `AgentRunner` path.
 There is no durable parent-side handle index, activity record, or pending-input
 log. On root restart, tool jobs, followups, active work, mailbox input, and
 undelivered output from the previous process are discarded. The root receives
-an unconditional crash reminder and decides what to retry. `list_handles`
+an unconditional crash reminder and decides what to retry. `agent list`
 finds child runs whose `parent_run_id` matches the current run without launching
-them. The first explicit `send_message` to an old open child adds a child crash
+them. The first explicit `agent send` to an old open child adds a child crash
 reminder and starts a fresh activity from that child's complete transcript.
 
 This recovery path assumes the runtime supervisor, cgroup, or container killed
@@ -456,24 +485,24 @@ the previous fiasco process and all locally managed descendants before
 resume. A stale busy lease fails immediately. Remote work and external side
 effects can survive and must be inspected after the restart reminder.
 
-The durable child guarantee belongs to `delegate` child runs, and the parent
+The durable child guarantee belongs to `agent start` child runs, and the parent
 run is the only resume entrypoint. Memory consolidation
 uses this same path rather than a special direct-tool child.
 
 ## Prompt And Cache Shape
 
 Agent and compaction calls use one invariant, tool-agnostic built-in system
-prompt and one sorted, frozen tool-schema set. The history schemas are included
-from the first call; automatic compaction never mutates this prefix.
-Feature-specific workflow stays with the corresponding schema instead of the
-shared system prose. Project instructions, skill metadata, memory paths, and
-stable GeneralTask guidance form a deterministic runtime reminder at the start
-of each run. The delegated task text follows as ordinary user content; the
-persisted initial message freezes both. Optional startup schemas are selected
-before the run starts. Agent role and remaining delegation depth change only
-the initial runtime-reminder tail. Current-process active-handle state is a
-non-durable synthetic reminder in normal requests, while a compaction request
-changes only the message tail.
+prompt and one sorted, frozen tool-schema set. The `fiasco` schema and history
+routes are included from the first call; automatic compaction never mutates
+this prefix. Feature-specific workflow stays with the native schema or internal
+command manifest instead of the shared system prose. Project instructions,
+skill metadata, memory paths, and stable GeneralTask guidance form a
+deterministic runtime reminder at the start of each run. The delegated task
+text follows as ordinary user content; the persisted initial message freezes
+both. Optional startup routes are selected before the run starts. Agent role
+and remaining delegation depth change only the initial runtime-reminder tail.
+Current-process active-handle state is a non-durable synthetic reminder in
+normal requests, while a compaction request changes only the message tail.
 
 The durable trajectory remains append-only; before a normal model call, an
 optional assistant compacted-state message can replace its older active prefix

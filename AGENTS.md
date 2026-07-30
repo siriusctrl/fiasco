@@ -11,9 +11,9 @@ cross-cutting invariants, verification, and handoff.
   and runtime-handle supervision.
 - `src/model/`: provider-neutral contracts and provider adapters. Wire formats
   and authentication stay here, outside the agent loop.
-- `src/tools/`: the deterministic built-in tool registry. Each leaf owns a typed
-  compile-time `tool.yaml`; related handle and history tools are grouped by
-  family.
+- `src/tools/`: deterministic native provider tools plus the hidden in-process
+  command registry. Each leaf owns a typed compile-time `tool.yaml`; related
+  handle and history tools are grouped by family.
 - `skills/`: installable Agent Skills whose optional procedural guidance stays
   outside the built-in tool surface.
 - `src/storage/`, `src/artifact.rs`, and `src/trajectory/`: self-contained run
@@ -36,8 +36,9 @@ See `docs/source-map.md` for the detailed ownership map.
 - Rust is the only implementation language for the harness. Root and child runs
   use one `AgentRunner`; a subagent is a child run, not a second loop or class.
 - Keep provider wire formats and authentication outside the agent loop. Keep one
-  deterministic, namespaced tool registry; the MCP command adapter uses the
-  same `Tool` contract and cannot silently replace built-ins.
+  deterministic native provider registry plus one deterministic hidden command
+  registry; the `fiasco` adapter and internal MCP adapter use the same `Tool`
+  contract and cannot silently replace built-ins.
 - Execute one assistant tool-call batch concurrently under one shared foreground
   window. Commit results in original call order. Promote only unfinished exact
   futures, without stopping or restarting them.
@@ -66,11 +67,11 @@ See `docs/source-map.md` for the detailed ownership map.
   file contents, while the original message preview remains generation-time
   evidence. Add asynchronous status envelopes only after payload limiting. See
   `docs/artifacts.md`.
-- Keep prompt and tool-schema assembly deterministic and frozen per run. Root,
-  child, and compaction requests use the same built-in schema set; compaction
-  reuses the normal system prompt and never executes tool calls. Stable prose
-  belongs in `prompts/agents.yaml`, static tool descriptions in leaf
-  `tool.yaml`, and execution logic in Rust.
+- Keep prompt, provider-schema, and command-catalog assembly deterministic and
+  frozen per run. Root, child, and compaction requests use the same built-in
+  schema set; compaction reuses the normal system prompt and never executes tool
+  calls. Stable prose belongs in `prompts/agents.yaml`, static tool descriptions
+  in leaf `tool.yaml`, and execution logic in Rust.
 - Orchestration graphs are optional workspace files governed by an installable
   skill, not runtime state or a scheduler. Memory is user/project Markdown
   outside the live transcript, not a special execution subsystem. Both are

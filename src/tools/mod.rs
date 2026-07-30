@@ -8,6 +8,7 @@ use crate::model::ToolSpec;
 
 mod assembly;
 pub mod bash;
+mod command;
 pub mod delegate;
 mod handle;
 mod history;
@@ -20,6 +21,7 @@ pub mod write;
 
 pub use assembly::{RunToolAssembly, build_app_tools};
 pub use bash::BashTool;
+pub use command::FiascoTool;
 pub use delegate::DelegateTool;
 pub use load_skill::LoadSkillTool;
 pub(crate) use manifest::embedded_tool_spec;
@@ -115,6 +117,14 @@ impl ToolRegistry {
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).map(|tool| tool.implementation.clone())
+    }
+
+    pub fn spec(&self, name: &str) -> Option<&ToolSpec> {
+        self.tools.get(name).map(|tool| &tool.spec)
+    }
+
+    pub fn remove(&mut self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools.remove(name).map(|tool| tool.implementation)
     }
 
     pub fn specs(&self) -> Vec<ToolSpec> {

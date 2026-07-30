@@ -1,0 +1,30 @@
+name: fiasco
+description: >-
+  Run one or more enabled Fiasco commands inside the current harness process.
+  Separate dependent commands with `|`; the complete output of each successful
+  stage becomes the next stage's stdin. Use `name=value` arguments, quote
+  whitespace, and use `-` as an explicit stdin value. A single positional value
+  is accepted when a command has exactly one required argument. End a
+  successful pipeline with `> path` to atomically replace one UTF-8 file at a
+  workspace-relative or absolute path. This is not a shell: it does not expand variables, globs,
+  redirections other than the final `>`, `&&`, `||`, substitutions, or
+  background jobs. Use bash for ordinary host commands and general shell
+  syntax.
+returns: >-
+  The final command's ordinary text, JSON, NDJSON, rich result, or error. A
+  redirected pipeline returns a short write confirmation instead. Intermediate
+  output remains exact and is not artifact-limited before reaching the next
+  stage.
+input_schema:
+  type: object
+  properties:
+    command:
+      type: string
+      minLength: 1
+      description: Fiasco command, linear pipeline, and optional terminal file redirect
+    stdin:
+      type: string
+      description: Exact optional UTF-8 input for the first command
+  required:
+    - command
+  additionalProperties: false

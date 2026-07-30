@@ -73,17 +73,17 @@ or automatically replay the turn.
 
 Automatic local compaction is off unless `compaction.compact_at_tokens` is set.
 That option controls compacted-state creation only: every agent profile has
-both history tool schemas from its first call, and neither its system prompt nor
-toolset changes when a compacted state appears. Fiasco estimates the system,
-frozen schemas, and active messages before the first request, then adopts
-provider-reported input usage whenever available. Between calls it estimates
-new content adapters replay, including compatible Chat `reasoning_content` and
-opaque provider continuation items. The compaction call uses the same provider,
-model, system prompt, and frozen tool schemas, with a separate output limit and
-one final user instruction. A tool-call or empty state emits a lifecycle event
-and is retried once without execution; a request error or two invalid responses
-leave the prior/full context in use. A fixed profile lacking either history
-tool or both generic artifact
+both history command routes from its first call, and neither its system prompt,
+provider schemas, nor enabled route catalog changes when a compacted state
+appears. Fiasco estimates the system, frozen schemas, and active messages before
+the first request, then adopts provider-reported input usage whenever available.
+Between calls it estimates new content adapters replay, including compatible
+Chat `reasoning_content` and opaque provider continuation items. The compaction
+call uses the same provider, model, system prompt, and frozen tool schemas, with
+a separate output limit and one final user instruction. A tool-call or empty
+state emits a lifecycle event and is retried once without execution; a request
+error or two invalid responses leave the prior/full context in use. A fixed
+profile lacking either history command adapter or both generic artifact
 inspection tools (`read` and `bash`) would keep the full context instead of
 compacting without exact retrieval.
 
@@ -98,12 +98,12 @@ again, and exact recent ordinary messages. The reminder is provider context,
 not another durable message. The omitted ordinary trajectory remains the source
 for read-only recovery:
 
-- `history_search` uses one Rust regex and returns newest matches only from the
-  compacted prefix, including matches in linked full textual artifacts. Each
-  match has an `m<N>` sequence ref, a `message` or `artifact` source, and a
-  bounded snippet;
-- `history_read` returns chronological Chat-compatible JSONL around that ref
-  and preserves tool-call/result pairs.
+- `fiasco` route `history search` uses one Rust regex and returns newest matches
+  only from the compacted prefix, including matches in linked full textual
+  artifacts. Each match has an `m<N>` sequence ref, a `message` or `artifact`
+  source, and a bounded snippet;
+- route `history read` returns chronological Chat-compatible JSONL around that
+  ref and preserves tool-call/result pairs.
 
 There is no cursor. The configured search maximum omits older query matches;
 refine the regex to reach them. If the already-bounded tool response is itself
@@ -129,36 +129,37 @@ loading the file, creating an artifact, or attaching content.
 
 ## Delegated Agents
 
-`delegate` starts a reusable general-task agent asynchronously. Its runtime
-handle is the child run id. Children share the workspace, provider, and base
-tools. The persisted `root` or `general_task` profile selects the model role.
-Exact remaining delegation depth is the sole durable delegation authority, and
-both profiles expose the same built-in schemas. The default maximum depth of
-one gives the initial child zero remaining depth.
+`fiasco` route `agent start` invokes the internal `delegate` adapter and starts
+a reusable general-task agent asynchronously. Its runtime handle is the child
+run id. Children share the workspace, provider, and command surface. The
+persisted `root` or `general_task` profile selects the model role. Exact
+remaining delegation depth is the sole durable delegation authority, and both
+profiles expose the same provider schemas. The default maximum depth of one
+gives the initial child zero remaining depth.
 
-`delegate` accepts a non-empty display name and a self-contained prompt. Every child is
-isolated: it starts with its own runtime reminder and delegated task, without
-copying the parent conversation, compaction state, or artifact references.
-The prompt must therefore include the complete objective and task-specific
-context. The child uses the configured GeneralTask model and records a normal,
-independent trajectory.
+The command accepts a non-empty display name and a self-contained prompt. Every
+child is isolated: it starts with its own runtime reminder and delegated task,
+without copying the parent conversation, compaction state, or artifact
+references. The prompt must therefore include the complete objective and
+task-specific context. The child uses the configured GeneralTask model and
+records a normal, independent trajectory.
 
-`inspect` returns a child's latest durable messages and can page backward by
-sequence. `send_message` always requires `mode`. `steer`
+`agent inspect` returns a child's latest durable messages and can page backward
+by sequence. `agent send` always requires `mode`. `steer`
 queues a normal user message after the current complete assistant/tool batch;
 `followup` waits for the current activity boundary. Neither mode interrupts a
 tool batch, and an idle agent starts immediately in either mode. Activity
-completion leaves the agent `idle`. `stop` interrupts only current activity;
-`close` rejects new input, cancels and joins active work when necessary, clears
-queued input, and then permanently closes the agent. `list_handles` discovers
-all visible handles or inspects named handles; wait-any `wait` observes both
-delegated agents and current-process tool jobs.
+completion leaves the agent `idle`. `agent stop` interrupts only current
+activity; `agent close` rejects new input, cancels and joins active work when
+necessary, clears queued input, and then permanently closes the agent. `agent
+list` discovers all visible handles or inspects named handles; wait-any `agent
+wait` observes both delegated agents and current-process tool jobs.
 
 There is no durable parent-side handle record or pending-input log. On root
 restart, active child work, tool jobs, queued followups, mailbox input, and
 undelivered output from the prior process are discarded. The root receives an
-unconditional crash reminder. `list_handles` discovers direct child runs by
-parent id without launching them. The first explicit `send_message` to an old
+unconditional crash reminder. `agent list` discovers direct child runs by
+parent id without launching them. The first explicit `agent send` to an old
 open child adds a child crash reminder and starts a new activity from the
 child's complete transcript. A closed child stays closed.
 
@@ -229,17 +230,18 @@ Reasoning is not included in `final.md`.
 The normal agent's built-in system prompt is workspace-independent,
 tool-agnostic, loaded from the embedded typed YAML registry, and invariant
 across its calls. Sorted tool schemas form the other stable request prefix and
-are frozen before the first call. Each schema owns its feature's workflow
-guidance, so removing a capability also removes its prompting influence. Core
-history schemas are included regardless of `compact_at_tokens`. Root
-and GeneralTask receive identical built-in schemas, including delegation and
-handle controls. Remaining delegation depth is runtime state; it appears in the
-initial reminder and a zero-depth `delegate` call fails before task creation.
-Optional web search and the single fixed MCP command schema depend on startup
-configuration. Remote MCP schemas remain in `catalog.json`; configured
-namespace, description, and source-map paths enter the runtime reminder.
-Memory adds reminder paths, not a schema. A compaction call reuses the same
-stable prefix.
+are frozen before the first call. Native schemas own their workflow guidance,
+while the `fiasco` description includes the enabled command catalog. Removing
+an optional command also removes its prompting influence. Core history routes
+are included regardless of `compact_at_tokens`. Root and GeneralTask receive
+identical provider schemas and command routes, including delegation and handle
+controls. Remaining delegation depth is runtime state; it appears in the
+initial reminder and a zero-depth `agent start` command fails before task
+creation. Optional web search and MCP change the command catalog at startup,
+not provider schema membership. Remote MCP schemas remain in `catalog.json`;
+configured namespace, description, and source-map paths enter the runtime
+reminder. Memory adds reminder paths, not a schema. A compaction call reuses the
+same stable prefix.
 
 The first user message begins with a `<runtime-reminder>` text block containing
 the workspace snapshot: path, `AGENTS.md` (falling back to lowercase

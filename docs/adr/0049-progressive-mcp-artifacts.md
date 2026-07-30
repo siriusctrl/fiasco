@@ -5,6 +5,8 @@
 - Refines: ADR 0014 (MCP adapter ownership and assembly)
 - Refines: ADR 0015 (MCP model-facing contract packaging)
 - Refines: ADR 0024 (optional MCP schema membership)
+- Refined by: ADR 0050 (the fixed MCP adapter is now an internal `fiasco`
+  command route)
 
 ## Context
 

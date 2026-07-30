@@ -433,10 +433,11 @@ async fn runner_compacts_active_context_but_preserves_raw_trajectory() {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect();
-        assert!(names.contains(&"history_search"));
-        assert!(names.contains(&"history_read"));
-        assert!(names.contains(&"delegate"));
+        assert!(names.contains(&"fiasco"));
         assert!(names.contains(&"marker"));
+        assert!(!names.contains(&"history_search"));
+        assert!(!names.contains(&"history_read"));
+        assert!(!names.contains(&"delegate"));
     }
     let stable_system = &normal_requests[0].system;
     let stable_tools = serde_json::to_value(&normal_requests[0].tools).unwrap();
